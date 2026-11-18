@@ -36,14 +36,27 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  -a APPLID, --applid APPLID
-                        CICS ApplID on VTAM, default is CICS
+  -a, --applid APPLID   CICS ApplID on VTAM, default is CICS
+  --custom-exit CUSTOM_CICS
+                        Custom string to type to exit to CICS terminal
+  --timeout TIMEOUT     Timeout in seconds for TN3270 negotiation (default: 30)
+  --ssl                 Force SSL/TLS connection even on non-standard ports
+  --no-verify           Disable TLS server certificate verification (useful
+                        when connecting by IP)
+  --lu LU               Specify an LU name for the TN3270 session
+  --proxy PROXY         SOCKS/HTTP proxy for s3270 (e.g.
+                        socks5:user:pass@host:port). Avoids proxychains TLS
+                        issues
+  --codepage CODEPAGE   Host EBCDIC code page for s3270 (e.g. german-euro for
+                        CP1141). Default: bracket (US)
+  --model MODEL         3270 terminal model (2=24x80, 3=32x80, 4=43x80,
+                        5=27x132). Default: 4
 
 General information:
   -A, --all             Gather all information about a CICS Transaction Server
   -i, --info            Gather basic information about a CICS region
   -u, --userids         Scrape userids found in different menus
-  -p PATTERN, --pattern PATTERN
+  -p, --pattern PATTERN
                         Specify a pattern of a files/transaction/tsqueue to
                         get (default is "*")
   -q, --quiet           Remove Trailing and journal before performing any
@@ -88,9 +101,8 @@ Transaction options:
                         <file.txt>
 
 Access options:
-  -U USERID, --userid USERID
-                        Specify a userid to use on CICS
-  -P PASSWORD, --password PASSWORD
+  -U, --userid USERID   Specify a userid to use on CICS
+  -P, --password PASSWORD
                         Specify a password for the userid
   -r PROPAGATE_USER     Given the region user ID, checks wether you are
                         allowed to use it to submit JOBs
@@ -98,16 +110,14 @@ Access options:
                         submitting a job
 
 JOB options:
-  -s SUBMIT, --submit SUBMIT
-                        Submit JCL to CICS server. Specify:
+  -s, --submit SUBMIT   Submit JCL to CICS server. Specify:
                         dummy,reverse_unix, reverse_tso, direct_unix,
                         reverse_unix, ftp or custom (need -j option)
   --queue QUEUE         Provides the name of the TD queue to submit a JOB
   --ftp-cmds FTP_CMDS   Files containig a list of ftp commands to execute
   --node NODE           System node name where the JOB should be submitted
                         (works only with Spool functions)
-  -l LHOST, --lhost LHOST
-                        Remote server to call back to for reverse shell
+  -l, --lhost LHOST     Remote server to call back to for reverse shell
                         (host:port)
   --port PORT           Remote port to open for bind shell in REXX
   --jcl JCL             Custom JCL file to provide
@@ -121,6 +131,13 @@ x3270, s3270 or wc3270.exe installed on your system
 ```
 pip3 install -r requirements.txt
 ```
+
+## Proxy Usage
+When connecting through a SOCKS or HTTP proxy, use the built-in `--proxy` option instead of proxychains. The proxychains `LD_PRELOAD` mechanism interferes with s3270's OpenSSL TLS handshake, causing connection failures on TLS-enabled targets.
+```
+python3 cicspwn.py 192.168.1.209 23 -a CICS -i --proxy socks5:user:pass@proxyhost:1080
+```
+Supported proxy types follow the s3270 format: `socks4://`, `socks5:`, `http://`, etc.
 
 ## Getting general information
 ```

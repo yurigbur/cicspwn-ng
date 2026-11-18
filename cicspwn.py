@@ -75,9 +75,27 @@ class bcolors:
 
 # Override some behaviour of py3270 library
 class EmulatorIntermediate(Emulator):
-    def __init__(self, visible=True, delay=0):
-        Emulator.__init__(self, visible)
+    def __init__(self, visible=True, delay=0, args=None):
+        Emulator.__init__(self, visible, args=args)
         self.delay = delay
+
+    def exec_command(self, cmdstr):
+        if isinstance(cmdstr, str):
+            cmdstr = cmdstr.encode('ascii')
+        return Emulator.exec_command(self, cmdstr)
+
+    @staticmethod
+    def _decode_data(data):
+        return [d.decode('utf-8', errors='replace') if isinstance(d, bytes) else d for d in data]
+
+    def string_get(self, ypos, xpos, length):
+        xpos -= 1
+        ypos -= 1
+        cmd = self.exec_command(
+            "Ascii({0},{1},{2})".format(ypos, xpos, length)
+        )
+        assert len(cmd.data) == 1, cmd.data
+        return cmd.data[0].decode('utf-8', errors='replace')
 
     def send_enter(self): # Allow a delay to be configured
         self.exec_command('Enter')
@@ -99,16 +117,17 @@ class EmulatorIntermediate(Emulator):
 
     def screen_get(self):
         response = self.exec_command('Ascii()')
-        if ''.join(response.data).strip() == "":
+        data = self._decode_data(response.data)
+        if ''.join(data).strip() == "":
             sleep(0.5)
             return self.screen_get()
-        return response.data
+        return data
 
     # Send text without triggering field protection
     def safe_send(self, text):
         for i in range(0, len(text)):
             self.send_string(text[i])
-            if self.status.field_protection == 'P':
+            if self.status.field_protection == b'P':
                 return False # We triggered field protection, stop
         return True # Safe
 
@@ -153,14 +172,15 @@ class EmulatorIntermediate(Emulator):
 
         for _ in range(0,2):
             response = self.exec_command('ReadBuffer(Ascii)')
-            if ''.join(response.data).strip()=="":
+            data = self._decode_data(response.data)
+            if ''.join(data).strip()=="":
                 sleep(0.3)
             else:
                 break
         else:
-            if ''.join(response.data).strip()=="":
+            if ''.join(data).strip()=="":
                 raise Exception("Unable to retrieve buffer data")
-        for counter, char in enumerate(response.data[row-1].split()):
+        for counter, char in enumerate(data[row-1].split()):
             if char.startswith("SF(c0=c"):
                 return counter+2 # +1 to convert the 0 based index to 1 based
                                  # +1 to move to actual field
@@ -168,12 +188,13 @@ class EmulatorIntermediate(Emulator):
     # Get the current x3270 cursor position
     def get_pos(self):
         results = self.exec_command('Query(Cursor)')
-        row = int(results.data[0].split(' ')[0])
-        col = int(results.data[0].split(' ')[1])
+        data = self._decode_data(results.data)
+        row = int(data[0].split(' ')[0])
+        col = int(data[0].split(' ')[1])
         return (row,col)
 
     def get_hostinfo(self):
-        return self.exec_command('Query(Host)').data[0].split(' ')
+        return self._decode_data(self.exec_command('Query(Host)').data)[0].split(' ')
 
 class ThreadListen(threading.Thread):
     """Threaded client connection for reverse REXX"""
@@ -270,19 +291,34 @@ def whine(text, kind='clear', level=0):
   elif level == 3: lvldisp = "\t\t\t"
   print(color+lvldisp+typdisp+text+ (bcolors.ENDC if color!="" else ""))
 
-def connect_zOS(target):
+def connect_zOS(target, timeout=30, ssl=False, lu=None):
     """
-    Connects to z/OS server. If Port 992 is used, instructs 3270 to use SSL
+    Connects to z/OS server.
+    SSL is auto-enabled for ports 992/10024 or via --ssl flag.
+    Waits up to `timeout` seconds for TN3270 negotiation to complete.
     """
-    whine('Connecting to target '+target,kind='info')
-    if "992" in target or "10024" in target:
-        em.connect('L:'+target)
-    else:
-        em.connect(target)
-    em.send_enter()
+    use_ssl = ssl or "992" in target or "10024" in target
+    connstr = target
+    if lu:
+        connstr = lu + '@' + connstr
+    if use_ssl:
+        connstr = 'L:' + connstr
+    whine('Connecting to target '+connstr,kind='info')
+    em.connect(connstr)
     if not em.is_connected():
         whine('Could not connect to ' + target + '. Aborting.',kind='err')
         sys.exit(1)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if em.status.emulator_mode == b'I':
+            break
+        sleep(0.5)
+        em.exec_command('Wait(0.5, Output)')
+    else:
+        whine('TN3270 negotiation timed out after '+str(timeout)+'s (stuck in NVT mode). Aborting.',kind='err')
+        sys.exit(1)
+    hostinfo = em.get_hostinfo()
+    whine('[DEBUG] Host info: ' + ' '.join(hostinfo), kind='warn')
 
 def do_authenticate(userid, password, pos_pass):
    """
@@ -317,11 +353,26 @@ def check_valid_applid(applid, do_authent, method = 1,custom_cics=False):
        If CICS appid is valid, it tries to access the CICS terminal
     """
 
+    data = em.screen_get()
+    whine('[DEBUG] Screen before typing APPLID (method '+str(method)+'):','warn')
+    for i, line in enumerate(data):
+        if line.strip():
+            print(f'  [{i:02d}] {line}')
+
+    em.delete_field()
     em.safe_send(applid) #CICS APPLID in VTAM
     data = em.screen_get()
+    whine('[DEBUG] Screen before ENTER (after typing APPLID):','warn')
+    for i, line in enumerate(data):
+        if line.strip():
+            print(f'  [{i:02d}] {line}')
     em.send_enter()
 
     data = em.screen_get()
+    whine('[DEBUG] Screen after ENTER:','warn')
+    for i, line in enumerate(data):
+        if line.strip():
+            print(f'  [{i:02d}] {line}')
 
     if any("Invalid Command" in d for d in data):
         whine('Invalid APPLID "'+applid+'"','err');
@@ -373,6 +424,12 @@ def check_valid_applid(applid, do_authent, method = 1,custom_cics=False):
     em.send_pf3()
     em.send_enter()
     sleep(SLEEP)
+
+    data = em.screen_get()
+    whine('[DEBUG] Screen before DFHAC2001 check (method '+str(method)+'):','warn')
+    for i, line in enumerate(data):
+        if line.strip():
+            print(f'  [{i:02d}] {line}')
 
     if em.find_response( 'DFHAC2001'):
         whine('Access to CICS Terminal is possible with APPID '+applid,'good')
@@ -2523,6 +2580,13 @@ if __name__ == "__main__" :
     group_info.add_argument('-b', help='if CEDA is available, it copies OLD_TRAN to NEW TRAN (-n option) to bypass RACF. if no NEW TRAN is specified, CICSpwn chooses an IBM supplied transaction always available',dest='old_tran')
     group_info.add_argument('-n', help='if CEDA is available, it copies OLD_TRAN (-b) to NEW TRAN to bypass RACF',dest='new_tran')
     parser.add_argument('--custom-exit',help='Custom string to type to ext to CICS terminal',dest='custom_cics',default=False)
+    parser.add_argument('--timeout',help='Timeout in seconds for TN3270 negotiation (default: 30)',type=int,default=30,dest='timeout')
+    parser.add_argument('--ssl',help='Force SSL/TLS connection even on non-standard ports',action='store_true',default=False,dest='ssl')
+    parser.add_argument('--no-verify',help='Disable TLS server certificate verification (useful when connecting by IP)',action='store_true',default=False,dest='no_verify')
+    parser.add_argument('--lu',help='Specify an LU name for the TN3270 session',default=None,dest='lu')
+    parser.add_argument('--proxy',help='SOCKS/HTTP proxy for s3270 (e.g. socks5:user:pass@host:port). Avoids proxychains TLS issues',default=None,dest='proxy')
+    parser.add_argument('--codepage',help='Host EBCDIC code page for s3270 (e.g. german-euro for CP1141). Default: bracket (US)',default=None,dest='codepage')
+    parser.add_argument('--model',help='3270 terminal model (2=24x80, 3=32x80, 4=43x80, 5=27x132). Default: 4',default=None,dest='model')
 
     group_trans.add_argument('-t','--trans', help='Get all installed transactions on a CICS TS server',action='store_true', default=False, dest='trans')
     group_trans.add_argument('--enable-trans', help='Enable a transaction (keyword ALL to enable every transaction) ',dest='ena_trans')
@@ -2600,8 +2664,17 @@ if __name__ == "__main__" :
             whine('Unable to open the file '+results.data,'err');
             sys.exit()
 
-    em = WrappedEmulator(False)
-    connect_zOS(results.IP+":"+results.PORT)
+    s3270_args = []
+    if results.no_verify:
+        s3270_args.append('-noverifycert')
+    if results.proxy:
+        s3270_args.extend(['-proxy', results.proxy])
+    if results.codepage:
+        s3270_args.extend(['-codepage', results.codepage])
+    if results.model:
+        s3270_args.extend(['-model', results.model])
+    em = WrappedEmulator(False, args=s3270_args or None)
+    connect_zOS(results.IP+":"+results.PORT, results.timeout, results.ssl, results.lu)
 
 
     main(results)
