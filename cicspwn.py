@@ -124,12 +124,18 @@ class EmulatorIntermediate(Emulator):
         return data
 
     # Send text without triggering field protection
-    def safe_send(self, text):
-        for i in range(0, len(text)):
-            self.send_string(text[i])
-            if self.status.field_protection == b'P':
-                return False # We triggered field protection, stop
-        return True # Safe
+    def safe_send(self, text, _retried=False):
+        try:
+            for i in range(0, len(text)):
+                self.send_string(text[i])
+                if self.status.field_protection == b'P':
+                    return False # We triggered field protection, stop
+            return True # Safe
+        except Exception as e:
+            if 'Keyboard locked' in str(e) and not _retried:
+                reset_keyboard()
+                return self.safe_send(text, _retried=True)
+            raise
 
     # Fill fields in carefully, checking for triggering field protections
     def safe_fieldfill(self, ypos, xpos, tosend, length):
@@ -223,16 +229,15 @@ class ThreadListen(threading.Thread):
 def logo():
 
   print(bcolors.BLUE + '''
+       ::::::::   :::::::::::   ::::::::    ::::::::   ::::::::: :::       :::::::    :::     ::::    :::  :::::::: 
+      :+:    :+:      :+:      :+:    :+:  :+:    :+:  :+:    :+::+:       :+::+:+:   :+:     :+:+:   :+: :+:    :+:
+      +:+             +:+      +:+         +:+         +:+    +:++:+       +:+:+:+:+  +:+     :+:+:+  +:+ +:+       
+      +#+             +#+      +#+         +#++:++#++  +#++:++#+ +#+  +:+  +#++#+ +:+ +#+ +#+ +#+ +:+ +#+ +#+  #++#+''' + bcolors.DARKBLUE + '''
+      +#+             +#+      +#+                +#+  +#+       +#+ +#+#+ +#++#+  +#+#+#     +#+  +#+#+# +#+    +#+
+      #+#    #+#      #+#      #+#    #+#  #+#    #+#  #+#        #+#+# #+#+# #+#   #+#+#     #+#   #+#+# #+#    #+#
+       ########   ###########   ########    ########   ###         ###   ###  ###    ####     ###    ####  ########
 
-       ::::::::   :::::::::::   ::::::::    ::::::::   ::::::::: :::       :::::::    :::
-      :+:    :+:      :+:      :+:    :+:  :+:    :+:  :+:    :+::+:       :+::+:+:   :+:
-      +:+             +:+      +:+         +:+         +:+    +:++:+       +:+:+:+:+  +:+
-      +#+             +#+      +#+         +#++:++#++  +#++:++#+ +#+  +:+  +#++#+ +:+ +#+ '''+bcolors.DARKBLUE+'''
-      +#+             +#+      +#+                +#+  +#+       +#+ +#+#+ +#++#+  +#+#+#
-      #+#    #+#      #+#      #+#    #+#  #+#    #+#  #+#        #+#+# #+#+# #+#   #+#+#
-       ########   ###########   ########    ########   ###         ###   ###  ###    ####
-
-                            The tool for some CICS p0wning !\t\tAuthor: @Ayoul3__\n'''+ bcolors.ENDC)
+                            The tool for some CICS p0wning !\tAuthors: @Ayoul3__ & @yukon\n''' + bcolors.ENDC)
 
 def signal_handler(signal, frame):
         print('Done !')
@@ -291,60 +296,150 @@ def whine(text, kind='clear', level=0):
   elif level == 3: lvldisp = "\t\t\t"
   print(color+lvldisp+typdisp+text+ (bcolors.ENDC if color!="" else ""))
 
-def connect_zOS(target, timeout=30, ssl=False, lu=None):
-    """
-    Connects to z/OS server.
-    SSL is auto-enabled for ports 992/10024 or via --ssl flag.
-    Waits up to `timeout` seconds for TN3270 negotiation to complete.
-    """
-    use_ssl = ssl or "992" in target or "10024" in target
+def try_connect(target, timeout, use_ssl, lu=None):
+    """Attempt a single connection with an optional LU. Returns True on success."""
     connstr = target
     if lu:
         connstr = lu + '@' + connstr
     if use_ssl:
         connstr = 'L:' + connstr
-    whine('Connecting to target '+connstr,kind='info')
-    em.connect(connstr)
-    if not em.is_connected():
-        whine('Could not connect to ' + target + '. Aborting.',kind='err')
-        sys.exit(1)
+    whine('Connecting to target ' + connstr, kind='info')
+    try:
+        em.connect(connstr)
+    except Exception as e:
+        whine('Connection failed: ' + str(e), kind='warn')
+        return False
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if em.status.emulator_mode == b'I':
-            break
+        if em.is_connected() and em.status.emulator_mode == b'I':
+            return True
         sleep(0.5)
-        em.exec_command('Wait(0.5, Output)')
-    else:
-        whine('TN3270 negotiation timed out after '+str(timeout)+'s (stuck in NVT mode). Aborting.',kind='err')
+        try:
+            em.exec_command('Wait(0.5, Output)')
+        except Exception:
+            return False
+    return False
+
+def connect_zOS(target, timeout=30, ssl=False, lu=None):
+    """
+    Connects to z/OS server.
+    SSL is auto-enabled for ports 992/10024 or via --ssl flag.
+    If --lu contains comma-separated LU names, tries each until one connects.
+    """
+    use_ssl = ssl or "992" in target or "10024" in target
+
+    if lu and ',' in lu:
+        lu_list = [l.strip() for l in lu.split(',')]
+        for lu_name in lu_list:
+            if try_connect(target, timeout, use_ssl, lu_name):
+                hostinfo = em.get_hostinfo()
+                return
+            whine('LU ' + lu_name + ' unavailable, trying next...', kind='warn')
+            try:
+                em.exec_command(b'Disconnect')
+            except Exception:
+                pass
+        whine('All LUs exhausted (' + ','.join(lu_list) + '). Aborting.', kind='err')
         sys.exit(1)
-    hostinfo = em.get_hostinfo()
-    whine('[DEBUG] Host info: ' + ' '.join(hostinfo), kind='warn')
+    else:
+        if not try_connect(target, timeout, use_ssl, lu):
+            whine('Could not connect to ' + target + '. Aborting.', kind='err')
+            sys.exit(1)
+        hostinfo = em.get_hostinfo()
 
-def do_authenticate(userid, password, pos_pass):
+def do_authenticate():
    """
-       It starts writting the userid, then moves to pos_pass to write the password
-       Works for VTAM and CICS authentication
+       Finds the userid and password fields on screen by their labels
+       (from -U label:value and -P label:value), types the values, and submits.
    """
+   data = em.screen_get()
 
-   posx, posy = em.get_pos()
+   # Find userid row by label (try label + ":" first to avoid matching error messages)
+   uid_row = None
+   for i, line in enumerate(data):
+       if results.userid_label + ':' in line:
+           uid_row = i + 1  # 1-indexed for move_to
+           break
+   if uid_row is None:
+       for i, line in enumerate(data):
+           if results.userid_label in line:
+               uid_row = i + 1
+               break
+   if uid_row is None:
+       whine('Could not find userid field "' + results.userid_label + '" on screen', 'err')
+       for i, line in enumerate(data):
+           if line.strip():
+               print(f'  [{i:02d}] {line}')
+       sys.exit(1)
 
-   em.safe_send(results.userid)
-   pwd_y_pos=em.find_field_start_on_row(pos_pass)
+   # Find password row by label (try label + ":" first to avoid matching error messages)
+   pwd_row = None
+   for i, line in enumerate(data):
+       if results.password_label + ':' in line and "neu" not in line:
+           pwd_row = i + 1
+           break
+   if pwd_row is None:
+       for i, line in enumerate(data):
+           if results.password_label in line and "neu" not in line:
+               pwd_row = i + 1
+               break
+   if pwd_row is None:
+       whine('Could not find password field "' + results.password_label + '" on screen', 'err')
+       for i, line in enumerate(data):
+           if line.strip():
+               print(f'  [{i:02d}] {line}')
+       sys.exit(1)
 
-   em.move_to(pos_pass,pwd_y_pos)
-   em.safe_send(results.password)
+   # Type userid
+   uid_y_pos = em.find_field_start_on_row(uid_row)
+   if uid_y_pos is None:
+       whine('Could not find input field on userid row ' + str(uid_row) + ' — screen may be in an error state', 'err')
+       for i, line in enumerate(data):
+           if line.strip():
+               print(f'  [{i:02d}] {line}')
+       sys.exit(1)
+   em.move_to(uid_row, uid_y_pos)
+   em.delete_field()
+   em.safe_send(results.userid_value)
+
+   # Type password
+   pwd_y_pos = em.find_field_start_on_row(pwd_row)
+   if pwd_y_pos is None:
+       whine('Could not find input field on password row ' + str(pwd_row) + ' — screen may be in an error state', 'err')
+       for i, line in enumerate(data):
+           if line.strip():
+               print(f'  [{i:02d}] {line}')
+       sys.exit(1)
+   em.move_to(pwd_row, pwd_y_pos)
+   em.safe_send(results.password_value)
+
    em.send_enter()
 
    data = em.screen_get()
-   if any("Your userid is invalid" in s for s in data):
-      whine('Incorrect userid information','err')
-      sys.exit()
-   elif any("Your password is invalid" in s for s in data):
-      whine('Incorrect password information','err')
-      sys.exit()
-   elif any("Sign on failure" in s for s in data):
-      whine('Invalid credentials','err')
-      sys.exit();
+   if results.login_errors:
+       error_strings = results.login_errors
+   else:
+       error_strings = [
+           "Your userid is invalid", "Your password is invalid", "Sign on failure",
+           "Kein Benutzer eingegeben", "Kein Passwort eingegeben",
+           "Benutzer nicht berechtigt", "Passwort ungueltig",
+           "DFHCE3549", "DFHCE3547",
+       ]
+   for err in error_strings:
+       if any(err in s for s in data):
+           whine('Authentication failed: found "' + err + '" on screen', 'err')
+           for i, line in enumerate(data):
+               if line.strip():
+                   print(f'  [{i:02d}] {line}')
+           sys.exit(1)
+
+LOGIN_SCREEN_MARKERS = ["Hdz/PersNr", "Passwort", "Password", "Userid", "Username", "Sign on", "Logon"]
+
+def is_login_screen(data):
+    """Detect if the current screen is a login screen."""
+    if results.userid_label:
+        return any(results.userid_label in d for d in data)
+    return any(marker in d for d in data for marker in LOGIN_SCREEN_MARKERS)
 
 def check_valid_applid(applid, do_authent, method = 1,custom_cics=False):
     """
@@ -354,50 +449,60 @@ def check_valid_applid(applid, do_authent, method = 1,custom_cics=False):
     """
 
     data = em.screen_get()
-    whine('[DEBUG] Screen before typing APPLID (method '+str(method)+'):','warn')
-    for i, line in enumerate(data):
-        if line.strip():
-            print(f'  [{i:02d}] {line}')
 
-    em.delete_field()
-    em.safe_send(applid) #CICS APPLID in VTAM
-    data = em.screen_get()
-    whine('[DEBUG] Screen before ENTER (after typing APPLID):','warn')
-    for i, line in enumerate(data):
-        if line.strip():
-            print(f'  [{i:02d}] {line}')
-    em.send_enter()
+    authenticated = False
 
-    data = em.screen_get()
-    whine('[DEBUG] Screen after ENTER:','warn')
-    for i, line in enumerate(data):
-        if line.strip():
-            print(f'  [{i:02d}] {line}')
+    # Detect if we're already on the login screen (skipped VTAM menu)
+    if is_login_screen(data):
+        whine('Login screen detected, skipping VTAM navigation', 'info')
+        if do_authent:
+            do_authenticate()
+            whine("Successful authentication", 'good')
+            authenticated = True
+        else:
+            whine('Login screen requires credentials. Use -U "<field_label>:<userid>" -P "<field_label>:<password>"', 'err')
+            sys.exit(1)
+    else:
+        # Standard VTAM menu flow: type APPLID and submit
+        em.delete_field()
+        em.safe_send(applid)
+        em.send_enter()
 
-    if any("Invalid Command" in d for d in data):
-        whine('Invalid APPLID "'+applid+'"','err');
-        sys.exit()
-
-    if any("Command is in progress" in d for d in data):
-        whine("Waiting for VTAM command completion",'warn')
-        sleep(1.3)
-
-    if do_authent:
-        pos_pass=1;
         data = em.screen_get()
-        for d in data:
-            if "Password " in d or "Code " in d or "passe " in d:
-                break;
-            else:
-               pos_pass +=1
-            if pos_pass > 23:
-                whine("Could not find a password field. Was looking for \"password\", \"code\" or \"pass\" strings",'err')
-                for d in data:
-                    print(d)
-                sys.exit();
-        do_authenticate(results.userid, results.password, pos_pass)
-        whine("Successful authentication",'good')
 
+        if any("Invalid Command" in d or "UNGUELTIGER COMMAND" in d for d in data):
+            whine('Invalid APPLID "'+applid+'"','err');
+            sys.exit()
+
+        if any("Command is in progress" in d for d in data):
+            whine("Waiting for VTAM command completion",'warn')
+            sleep(1.3)
+
+        # After VTAM navigation, check if we landed on a login screen
+        data = em.screen_get()
+        if is_login_screen(data):
+            whine('Login screen detected after VTAM navigation', 'info')
+            if do_authent:
+                do_authenticate()
+                whine("Successful authentication", 'good')
+                authenticated = True
+            else:
+                whine('Login screen requires credentials. Use -U and -P.', 'err')
+                sys.exit(1)
+
+    # After authentication, check if DFHAC2001 is already on screen
+    if authenticated:
+        data = em.screen_get()
+        if em.find_response('DFHAC2001'):
+            whine('Access to CICS Terminal is possible with APPID '+applid,'good')
+            em.send_clear()
+            return True
+        else:
+            whine('Authenticated but no DFHAC2001 — assuming custom CICS application','info')
+            em.send_clear()
+            return True
+
+    # Standard (unauthenticated) DFHAC2001 flow
     if custom_cics:
       em.safe_send(custom_cics)
       em.send_enter()
@@ -420,16 +525,11 @@ def check_valid_applid(applid, do_authent, method = 1,custom_cics=False):
           em.send_clear()
 
     em.move_to(1,1)
-    #em.send_string('CESF') #CICS CESF is the Signoff command
     em.send_pf3()
     em.send_enter()
     sleep(SLEEP)
 
     data = em.screen_get()
-    whine('[DEBUG] Screen before DFHAC2001 check (method '+str(method)+'):','warn')
-    for i, line in enumerate(data):
-        if line.strip():
-            print(f'  [{i:02d}] {line}')
 
     if em.find_response( 'DFHAC2001'):
         whine('Access to CICS Terminal is possible with APPID '+applid,'good')
@@ -442,11 +542,24 @@ def check_valid_applid(applid, do_authent, method = 1,custom_cics=False):
         whine('Returning to CICS terminal via method '+str(method),kind='info')
         return check_valid_applid(applid, do_authent, method,custom_cics=custom_cics)
 
+def reset_keyboard():
+    """Reset keyboard lock and ensure terminal is ready for input."""
+    for _ in range(3):
+        try:
+            em.exec_command(b'Reset')
+            em.exec_command(b'Clear')
+            em.exec_command(b'Wait(3, Unlock)')
+            return
+        except Exception:
+            sleep(0.5)
+            continue
+
 def query_cics(request, verify, line):
     """
       Function to send a request to CICS and see if it worked.
       It does not support double send (required for CECI)
     """
+    reset_keyboard()
     em.move_to(1,2)
     em.safe_send(format_request(request))
     em.send_enter()
@@ -464,6 +577,7 @@ def query_cics(request, verify, line):
         if v in data[line-1].strip():
             return True
     else:
+        em.send_clear()
         return False
 
 def get_cics_value(request, identifier, double_enter=False):
@@ -471,6 +585,7 @@ def get_cics_value(request, identifier, double_enter=False):
       Send a request to CICS, stores the result in a variable then returns it
       supports double send required by CECI
     """
+    reset_keyboard()
     em.move_to(1,2)
     for i in identifier:
         request += " "+i+"(&"+i[:3]+")"
@@ -514,6 +629,7 @@ def query_cics_scrap(request, pattern, length, depth, scrolls):
       @depth : click on the value to get more details
       @scrolls: how many F11 before getting the pattern on screen
     """
+    reset_keyboard()
     em.move_to(1,2)
 
     em.safe_send(format_request(request))
@@ -552,10 +668,7 @@ def send_cics(request, double=False):
       Sends request to CICS
       handles double send required by CECI
     """
-
-    #em.send_clear()
-    #data = em.screen_get()
-
+    reset_keyboard()
     em.move_to(1,2)
     em.safe_send(format_request(request))
     em.send_enter()
@@ -577,7 +690,8 @@ def send_cics(request, double=False):
     elif "RESPONSE: NOSPOOL" in data[22]:
         return False
     else:
-        whine('Error:' + data[22],'err')
+        if data[22].strip():
+            whine('Error: ' + data[22].strip(),'err')
         return False
 
 def get_hql_files():
@@ -630,6 +744,7 @@ def get_users():
       Called by get_infos(). retrieves active users
     """
     out = []
+    reset_keyboard()
     em.move_to(1,2)
 
     em.safe_send(format_request(CEMT+" I TASK"))
@@ -643,9 +758,9 @@ def get_users():
         whine('Cannot access CEMT to list active users, try --bypass switch','err')
         return None
     for d in data:
-       if "Use" in d:
+       if "Use(" in d:
            pos= d.find("Use(") + len("Use(")
-           out.append(d[pos:pos+8].strip())
+           out.append(d[pos:pos+8].strip().replace(")",""))
 
     em.send_pf3()
     out=list(set(out))
@@ -869,13 +984,14 @@ def get_infos():
     whine("LU session name: "+netname,'good',1)
     whine("language: "+language,'good',1)
 
-    hlq_files = get_hql_files()
-    hlq_libraries = get_hql_libraries()
+    if is_cemt:
+        hlq_files = get_hql_files()
+        hlq_libraries = get_hql_libraries()
 
-    if hlq_files:
-       whine("Files HLQ:\t"+hlq_files,'good',1)
-    if hlq_libraries:
-       whine("Library path:\t"+hlq_libraries,'good',1)
+        if hlq_files:
+           whine("Files HLQ:\t"+hlq_files,'good',1)
+        if hlq_libraries:
+           whine("Library path:\t"+hlq_libraries,'good',1)
 
     whine("Active users", 'info')
     users = get_users()
@@ -2387,22 +2503,8 @@ def main(results):
     do_authent = False
     sleep(SLEEP)
 
-    if (results.userid != None and results.password !=None):
-
+    if (results.userid_value != None and results.password_value != None):
        do_authent = True
-       data = em.screen_get()
-       pos_pass=1;
-       logon_screen=False
-
-       for d in data:
-         if "Password" in d or "Code" in d:
-           logon_screen=True
-           break
-         else:
-           pos_pass +=1
-       if logon_screen:
-           do_authenticate(results.userid, results.password, pos_pass)
-           whine("Successful authentication", 'good')
 
     # Assigning new transaction names to CECI and CEMT if need be
     CEMT = results.cemt
@@ -2528,10 +2630,20 @@ def main(results):
         whine("Scraping userids from different menus", 'info')
         em.send_pf3();
         region_id = fetch_userids()
-        if region_id:
+        if region_id and query_cics(CECI, 'ACquire', 5):
              check_propagate(region_id)
 
 
+    try:
+        reset_keyboard()
+        em.exec_command(b'Clear')
+        em.exec_command(b'Wait(1, Unlock)')
+        em.move_to(1,2)
+        em.safe_send('CESF')
+        em.send_enter()
+        sleep(0.5)
+    except Exception:
+        pass
     em.terminate()
 
 
@@ -2583,7 +2695,7 @@ if __name__ == "__main__" :
     parser.add_argument('--timeout',help='Timeout in seconds for TN3270 negotiation (default: 30)',type=int,default=30,dest='timeout')
     parser.add_argument('--ssl',help='Force SSL/TLS connection even on non-standard ports',action='store_true',default=False,dest='ssl')
     parser.add_argument('--no-verify',help='Disable TLS server certificate verification (useful when connecting by IP)',action='store_true',default=False,dest='no_verify')
-    parser.add_argument('--lu',help='Specify an LU name for the TN3270 session',default=None,dest='lu')
+    parser.add_argument('--lu',help='LU name(s) for the TN3270 session. Comma-separated to try multiple (e.g. "B3GI,B3GJ,B37J")',default=None,dest='lu')
     parser.add_argument('--proxy',help='SOCKS/HTTP proxy for s3270 (e.g. socks5:user:pass@host:port). Avoids proxychains TLS issues',default=None,dest='proxy')
     parser.add_argument('--codepage',help='Host EBCDIC code page for s3270 (e.g. german-euro for CP1141). Default: bracket (US)',default=None,dest='codepage')
     parser.add_argument('--model',help='3270 terminal model (2=24x80, 3=32x80, 4=43x80, 5=27x132). Default: 4',default=None,dest='model')
@@ -2604,8 +2716,10 @@ if __name__ == "__main__" :
     group_trans.add_argument('--check-files', help='Checks security access to the files specified in <file.txt>',dest='check_files')
 
 
-    group_access.add_argument('-U', '--userid', help='Specify a userid to use on CICS', dest='userid')
-    group_access.add_argument('-P', '--password', help='Specify a password for the userid', dest='password')
+    group_access.add_argument('-U', '--userid', help='Specify userid as label:value (e.g. "Hdz/PersNr:myuser"). Label is the field name on screen.', dest='userid')
+    group_access.add_argument('-P', '--password', help='Specify password as label:value (e.g. "Passwort:mypass"). Label is the field name on screen.', dest='password')
+    group_access.add_argument('--login-error', help='Custom error string to detect failed login (e.g. "Fehler"). Can be specified multiple times.', action='append', dest='login_errors')
+    group_access.add_argument('--login-key', help='AID key to send on initial screen before login (e.g. "pf5", "enter", "clear"). Use when the CICS welcome screen requires a key press to reach the login screen.', default=None, dest='login_key')
     group_access.add_argument('-r', help='Given the region user ID, checks wether you are allowed to use it to submit JOBs', default=False,dest='propagate_user')
     group_access.add_argument('-g', help='Checks wether you can impersonate another user when submitting a job', default=False,dest='surrogat_user')
 
@@ -2664,6 +2778,23 @@ if __name__ == "__main__" :
             whine('Unable to open the file '+results.data,'err');
             sys.exit()
 
+    # Parse label:value format for -U and -P
+    if results.userid:
+        if ':' not in results.userid:
+            whine('-U must be label:value (e.g. "Hdz/PersNr:myuser")', 'err')
+            sys.exit(1)
+        results.userid_label, results.userid_value = results.userid.split(':', 1)
+    else:
+        results.userid_label = results.userid_value = None
+
+    if results.password:
+        if ':' not in results.password:
+            whine('-P must be label:value (e.g. "Passwort:mypass")', 'err')
+            sys.exit(1)
+        results.password_label, results.password_value = results.password.split(':', 1)
+    else:
+        results.password_label = results.password_value = None
+
     s3270_args = []
     if results.no_verify:
         s3270_args.append('-noverifycert')
@@ -2676,5 +2807,35 @@ if __name__ == "__main__" :
     em = WrappedEmulator(False, args=s3270_args or None)
     connect_zOS(results.IP+":"+results.PORT, results.timeout, results.ssl, results.lu)
 
+    if results.login_key:
+        AID_KEYS = {
+            'enter': b'Enter', 'clear': b'Clear',
+            'pf1': b'PF(1)', 'pf2': b'PF(2)', 'pf3': b'PF(3)', 'pf4': b'PF(4)',
+            'pf5': b'PF(5)', 'pf6': b'PF(6)', 'pf7': b'PF(7)', 'pf8': b'PF(8)',
+            'pf9': b'PF(9)', 'pf10': b'PF(10)', 'pf11': b'PF(11)', 'pf12': b'PF(12)',
+            'pf13': b'PF(13)', 'pf14': b'PF(14)', 'pf15': b'PF(15)', 'pf16': b'PF(16)',
+            'pf17': b'PF(17)', 'pf18': b'PF(18)', 'pf19': b'PF(19)', 'pf20': b'PF(20)',
+            'pf21': b'PF(21)', 'pf22': b'PF(22)', 'pf23': b'PF(23)', 'pf24': b'PF(24)',
+            'pa1': b'PA(1)', 'pa2': b'PA(2)', 'pa3': b'PA(3)',
+        }
+        key = results.login_key.lower()
+        if key not in AID_KEYS:
+            whine('Unknown --login-key "' + results.login_key + '". Valid: ' + ', '.join(sorted(AID_KEYS.keys())), 'err')
+            sys.exit(1)
+        whine('Sending ' + results.login_key.upper() + ' on initial screen', 'info')
+        sleep(SLEEP)
+        em.exec_command(AID_KEYS[key])
+        for _attempt in range(15):
+            try:
+                em.exec_command(b'Wait(2, Output)')
+            except Exception:
+                pass
+            data = em.screen_get()
+            if is_login_screen(data):
+                whine('Login screen ready after ' + results.login_key.upper(), 'good')
+                break
+            sleep(0.5)
+        else:
+            whine('Screen may not have transitioned after ' + results.login_key.upper() + ' — continuing anyway', 'warn')
 
     main(results)
