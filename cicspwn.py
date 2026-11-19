@@ -433,7 +433,7 @@ def do_authenticate():
                    print(f'  [{i:02d}] {line}')
            sys.exit(1)
 
-LOGIN_SCREEN_MARKERS = ["Hdz/PersNr", "Passwort", "Password", "Userid", "Username", "Sign on", "Logon"]
+LOGIN_SCREEN_MARKERS = ["Passwort", "Password", "Userid", "Username", "Sign on", "Logon", "Benutzer"]
 
 def is_login_screen(data):
     """Detect if the current screen is a login screen."""
@@ -2695,7 +2695,7 @@ if __name__ == "__main__" :
     parser.add_argument('--timeout',help='Timeout in seconds for TN3270 negotiation (default: 30)',type=int,default=30,dest='timeout')
     parser.add_argument('--ssl',help='Force SSL/TLS connection even on non-standard ports',action='store_true',default=False,dest='ssl')
     parser.add_argument('--no-verify',help='Disable TLS server certificate verification (useful when connecting by IP)',action='store_true',default=False,dest='no_verify')
-    parser.add_argument('--lu',help='LU name(s) for the TN3270 session. Comma-separated to try multiple (e.g. "B3GI,B3GJ,B37J")',default=None,dest='lu')
+    parser.add_argument('--lu',help='LU name(s) for the TN3270 session. Comma-separated to try multiple (e.g. "LUA1,LUA2,LUA3")',default=None,dest='lu')
     parser.add_argument('--proxy',help='SOCKS/HTTP proxy for s3270 (e.g. socks5:user:pass@host:port). Avoids proxychains TLS issues',default=None,dest='proxy')
     parser.add_argument('--codepage',help='Host EBCDIC code page for s3270 (e.g. german-euro for CP1141). Default: bracket (US)',default=None,dest='codepage')
     parser.add_argument('--model',help='3270 terminal model (2=24x80, 3=32x80, 4=43x80, 5=27x132). Default: 4',default=None,dest='model')
@@ -2716,9 +2716,9 @@ if __name__ == "__main__" :
     group_trans.add_argument('--check-files', help='Checks security access to the files specified in <file.txt>',dest='check_files')
 
 
-    group_access.add_argument('-U', '--userid', help='Specify userid as label:value (e.g. "Hdz/PersNr:myuser"). Label is the field name on screen.', dest='userid')
-    group_access.add_argument('-P', '--password', help='Specify password as label:value (e.g. "Passwort:mypass"). Label is the field name on screen.', dest='password')
-    group_access.add_argument('--login-error', help='Custom error string to detect failed login (e.g. "Fehler"). Can be specified multiple times.', action='append', dest='login_errors')
+    group_access.add_argument('-U', '--userid', help='Specify userid as label:value (e.g. "User ID:myuser"). Label is the field name on screen.', dest='userid')
+    group_access.add_argument('-P', '--password', help='Specify password as label:value (e.g. "Password:mypass"). Label is the field name on screen.', dest='password')
+    group_access.add_argument('--login-error', help='Custom error string to detect failed login (e.g. "Invalid"). Can be specified multiple times.', action='append', dest='login_errors')
     group_access.add_argument('--login-key', help='AID key to send on initial screen before login (e.g. "pf5", "enter", "clear"). Use when the CICS welcome screen requires a key press to reach the login screen.', default=None, dest='login_key')
     group_access.add_argument('-r', help='Given the region user ID, checks wether you are allowed to use it to submit JOBs', default=False,dest='propagate_user')
     group_access.add_argument('-g', help='Checks wether you can impersonate another user when submitting a job', default=False,dest='surrogat_user')
@@ -2781,7 +2781,7 @@ if __name__ == "__main__" :
     # Parse label:value format for -U and -P
     if results.userid:
         if ':' not in results.userid:
-            whine('-U must be label:value (e.g. "Hdz/PersNr:myuser")', 'err')
+            whine('-U must be label:value (e.g. "User ID:myuser")', 'err')
             sys.exit(1)
         results.userid_label, results.userid_value = results.userid.split(':', 1)
     else:
@@ -2789,7 +2789,7 @@ if __name__ == "__main__" :
 
     if results.password:
         if ':' not in results.password:
-            whine('-P must be label:value (e.g. "Passwort:mypass")', 'err')
+            whine('-P must be label:value (e.g. "Password:mypass")', 'err')
             sys.exit(1)
         results.password_label, results.password_value = results.password.split(':', 1)
     else:

